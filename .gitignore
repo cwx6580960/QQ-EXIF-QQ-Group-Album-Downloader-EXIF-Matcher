@@ -1,0 +1,28 @@
+# Python caches and local tooling
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# PyInstaller and local build output
+build/
+dist/
+release/
+*.spec
+
+# Runtime state, credentials and local archives
+work/
+*.sqlite3
+*.dpapi
+metadata/
+reports/
+00_raw/
+01_library/
+
+# Local editor and OS files
+.vscode/
+.idea/
+*.log
+Thumbs.db
+Desktop.ini

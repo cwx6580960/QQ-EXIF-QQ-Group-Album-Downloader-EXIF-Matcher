@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "exportedAt": "2026-08-19T14:00:00+08:00",
+  "photos": [
+    {
+      "photo_id": "example-photo-001",
+      "album_id": "example-album",
+      "album_name": "示例相册",
+      "group_id": "123456789",
+      "uploader": "示例用户",
+      "original_name": "IMG_0001.jpg",
+      "original_url": "https://example.invalid/IMG_0001.jpg",
+      "upload_time": "2020-08-16T14:32:08+08:00",
+      "shoot_time": "",
+      "source_page": "https://h5.qzone.qq.com/groupphoto/"
+    }
+  ]
+}

@@ -239,6 +239,41 @@ class CoreTests(unittest.TestCase):
             self.assertFalse(destination.exists())
             self.assertFalse(destination.with_suffix(".jpg.part").exists())
 
+    def test_downloader_accepts_qq_cdn_jpeg_with_trailing_payload(self):
+        from PIL import Image
+
+        class Response:
+            def __init__(self, payload):
+                self.payload = payload
+                self.headers = {"Content-Type": "image/jpeg", "Content-Length": str(len(payload))}
+                self.sent = False
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self, _size):
+                if self.sent:
+                    return b""
+                self.sent = True
+                return self.payload
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source.jpg"
+            Image.new("RGB", (32, 32), "white").save(source, format="JPEG")
+            payload = source.read_bytes() + (b"\x00" * (128 * 1024 + 1)) + b"VShapEn\x00"
+            destination = root / "photo.jpg"
+            record = PhotoRecord(photo_id="p1", original_url="https://qungz.photo.store.qq.com/qun-qungz/a/p1/1280")
+            with patch("urllib.request.urlopen", return_value=Response(payload)):
+                result = Downloader(root).download_one(record, destination)
+            self.assertEqual(result, destination)
+            self.assertEqual(result.read_bytes(), payload)
+            self.assertTrue(media_file_is_complete(result))
+            validate_download_file(result, ".jpg")
+
     def test_validate_download_file_rejects_truncated_jpeg(self):
         from PIL import Image
 

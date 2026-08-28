@@ -830,6 +830,17 @@ def detect_media_suffix(path: Path) -> str:
     return fallback
 
 
+def jpeg_contains_eoi(path: Path) -> bool:
+    """Find a JPEG EOI marker even when QQ appends data after the image."""
+    previous = b""
+    with path.open("rb") as handle:
+        while chunk := handle.read(256 * 1024):
+            if b"\xff\xd9" in previous + chunk:
+                return True
+            previous = chunk[-1:]
+    return False
+
+
 def validate_download_file(path: Path, expected_suffix: str = "") -> None:
     """Reject incomplete media before replacing the destination file."""
     if not path.exists() or path.stat().st_size <= 0:
@@ -843,12 +854,8 @@ def validate_download_file(path: Path, expected_suffix: str = "") -> None:
                     image.load()
             except Exception as exc:
                 raise ValueError("图片文件不完整或已损坏") from exc
-        if suffix == ".jpg":
-            with path.open("rb") as handle:
-                handle.seek(max(0, path.stat().st_size - 128 * 1024))
-                tail = handle.read()
-            if b"\xff\xd9" not in tail:
-                raise ValueError("JPEG 缺少结束标记，下载可能被截断")
+        if suffix == ".jpg" and not jpeg_contains_eoi(path):
+            raise ValueError("JPEG 缺少结束标记，下载可能被截断")
 
 
 def media_file_is_complete(path: Path) -> bool:

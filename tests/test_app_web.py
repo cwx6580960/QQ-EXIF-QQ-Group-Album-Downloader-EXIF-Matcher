@@ -96,6 +96,50 @@ class AppWebTests(unittest.TestCase):
             self.assertEqual(fake_state.peak_library, 4)
             self.assertIn("4 线程", fake_state.job_status)
 
+    def test_library_worker_continues_when_some_downloads_are_missing(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            raw = root / "raw.jpg"
+            raw.write_bytes(b"raw")
+            ready = PhotoRecord(
+                photo_id="ready",
+                group_id="group",
+                album_name="album",
+                raw_path=str(raw),
+                chosen_time="2020-01-02T12:00:00+08:00",
+                date_source="FILE_EXIF",
+                date_review="ready",
+            )
+            missing = PhotoRecord(
+                photo_id="missing",
+                group_id="group",
+                album_name="album",
+                chosen_time="2020-01-02T12:00:00+08:00",
+                date_source="FILE_EXIF",
+                date_review="ready",
+                status="download_failed",
+            )
+            fake_state = _FakeState([ready, missing])
+            calls = []
+
+            def fake_copy(record, _output, embed_metadata=False):
+                del embed_metadata
+                calls.append(record.photo_id)
+                record.local_path = str(root / f"library-{record.photo_id}.jpg")
+                record.status = "archived"
+                return record, Path(record.local_path)
+
+            with (
+                patch.object(app_web, "STATE", fake_state),
+                patch.object(app_web, "create_library_copy", side_effect=fake_copy),
+                patch.object(app_web, "write_reports"),
+            ):
+                app_web.library_worker(root, embed_metadata=False, workers=1)
+
+            self.assertEqual(calls, ["ready"])
+            self.assertIn("生成 1", fake_state.job_status)
+            self.assertIn("未下载跳过 1", fake_state.job_status)
+
 
 if __name__ == "__main__":
     unittest.main()

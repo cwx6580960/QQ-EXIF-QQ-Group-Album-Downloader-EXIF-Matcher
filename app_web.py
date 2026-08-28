@@ -668,11 +668,12 @@ def library_worker(output: Path, embed_metadata: bool = False, workers: int = DE
     try:
         records = [row for row in STATE.database.all() if not STATE.group_id or row.group_id == STATE.group_id]
         missing = [row for row in records if not row.raw_path or not Path(row.raw_path).exists()]
-        if missing:
-            raise RuntimeError(f"仍有 {len(missing)} 张未下载分析，不能开始最终整理")
         if not records:
             STATE.update(job_status="没有可生成整理副本的记录", progress=100)
             return
+        available = [row for row in records if row.raw_path and Path(row.raw_path).exists()]
+        if not available:
+            raise RuntimeError(f"仍有 {len(missing)} 张未下载分析，没有可生成的整理副本")
         workers = max(1, min(int(workers), MAX_DOWNLOAD_WORKERS))
         with STATE.lock:
             STATE.library_workers = workers
@@ -702,7 +703,7 @@ def library_worker(output: Path, embed_metadata: bool = False, workers: int = DE
                 with STATE.lock:
                     STATE.active_library = max(0, STATE.active_library - 1)
 
-        iterator = iter(records)
+        iterator = iter(available)
         pending: dict[object, PhotoRecord] = {}
         with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="qq-exif") as executor:
             def submit_available() -> None:
@@ -744,18 +745,25 @@ def library_worker(output: Path, embed_metadata: bool = False, workers: int = DE
                     finished = created + skipped + review + failed + cancelled
                     STATE.update(
                         job_status=(
-                            f"正在停止 EXIF 写入：已完成 {finished}/{len(records)}"
+                            f"正在停止 EXIF 写入：已完成 {finished}/{len(available)}"
                             if STATE.cancel_event.is_set()
-                            else f"并发写入整理副本 EXIF：已完成 {finished}/{len(records)}（{workers} 线程）"
+                            else f"并发写入整理副本 EXIF：已完成 {finished}/{len(available)}（{workers} 线程）"
                         ),
-                        progress=int(finished * 100 / len(records)),
+                        progress=int(finished * 100 / len(available)),
                         records_changed=STATE.records_changed + 1 if finished % 25 == 0 else STATE.records_changed,
                     )
                 submit_available()
         STATE.database.export(output / "metadata")
         write_reports(STATE.database, output)
         prefix = "整理已停止" if STATE.cancel_event.is_set() else "整理完成"
-        STATE.update(job_status=f"{prefix}：生成 {created}，已有 {skipped}，待复核跳过 {review}，失败 {failed}，中断 {cancelled}（{workers} 线程）", progress=100 if not STATE.cancel_event.is_set() else int(finished * 100 / len(records)), records_changed=STATE.records_changed + 1)
+        STATE.update(
+            job_status=(
+                f"{prefix}：生成 {created}，已有 {skipped}，待复核跳过 {review}，"
+                f"失败 {failed}，未下载跳过 {len(missing)}，中断 {cancelled}（{workers} 线程）"
+            ),
+            progress=100 if not STATE.cancel_event.is_set() else int(finished * 100 / len(available)),
+            records_changed=STATE.records_changed + 1,
+        )
     except Exception as exc:
         STATE.update(job_status=f"整理失败：{exc}")
     finally:
@@ -927,10 +935,13 @@ class Handler(BaseHTTPRequestHandler):
             STATE.cancel_event.clear()
             if self.path == "/api/download-analyze":
                 STATE.reset_download_metrics(workers);STATE.update(job_running=True,job_status=f"准备以 {workers} 个线程下载原图并分析",progress=0);threading.Thread(target=download_analyze_worker,args=(path,workers),daemon=True).start();self.json({"ok":True,"message":f"下载与分析任务已开始：{workers} 个线程；不会生成整理副本"});return
-            rows=[row for row in STATE.records() if not STATE.group_id or row.group_id==STATE.group_id];missing=sum(not row.raw_path or not Path(row.raw_path).exists() for row in rows)
-            if missing: self.json({"ok":False,"message":f"仍有 {missing} 张未下载分析，不能生成整理副本"},409);return
-            review=sum(row.date_review=="review" or row.date_source in {"UNKNOWN","BATCH_SINGLE_DATE"} for row in rows)
-            STATE.update(job_running=True,job_status=f"准备以 {workers} 个线程生成整理副本",progress=0);threading.Thread(target=library_worker,args=(path,embed,workers),daemon=True).start();self.json({"ok":True,"message":f"整理任务已开始：{workers} 个线程；{review} 张待复核照片会被跳过"});return
+            rows=[row for row in STATE.records() if not STATE.group_id or row.group_id==STATE.group_id]
+            missing=sum(not row.raw_path or not Path(row.raw_path).exists() for row in rows)
+            available=len(rows)-missing
+            if not available:
+                self.json({"ok":False,"message":f"仍有 {missing} 张未下载分析，没有可生成的整理副本"},409);return
+            review=sum(row.date_review=="review" or row.date_source in {"UNKNOWN","BATCH_SINGLE_DATE"} for row in rows if row.raw_path and Path(row.raw_path).exists())
+            STATE.update(job_running=True,job_status=f"准备以 {workers} 个线程生成整理副本",progress=0);threading.Thread(target=library_worker,args=(path,embed,workers),daemon=True).start();self.json({"ok":True,"message":f"整理任务已开始：{workers} 个线程；{review} 张待复核照片会被跳过；{missing} 张未下载记录将保留"});return
         if self.path == "/api/archive":
             self.json({"ok":False,"message":"流程已拆分，请先下载并分析，再生成整理副本"},410);return
         if self.path == "/api/cancel":
